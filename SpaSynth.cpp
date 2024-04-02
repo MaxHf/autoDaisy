@@ -20,19 +20,25 @@ int       step          = 0;
 int       base_note     = 48; // C3
 const int minor_scale[] = {0, 2, 3, 5, 7, 8, 10, 12};
 
-// DSP Objects
-Metro      clock;
-Oscillator osc[VOICE_COUNT];
-AdEnv      env[VOICE_COUNT];
-Svf        flt[VOICE_COUNT];
+// DSP
+#define MAX_DELAY static_cast<size_t>(48000 * 2.0f)
+DelayLine<float, MAX_DELAY> dl;
+Metro                       clock;
+Oscillator                  osc[VOICE_COUNT];
+AdEnv                       env[VOICE_COUNT];
+Svf                         flt[VOICE_COUNT];
 
 // Controls
 float mx_knb_1, mx_knb_2, mx_knb_3, mx_knb_4, mx_knb_5, mx_knb_6, mx_knb_7,
     mx_knb_8;
-Switch button1, button2, button3;
+Switch    button1, button2, button3;
+const int UPDATE_RATE  = 96;
+int       update_count = 0;
 
 // Parameters
-float clock_speed, note_spread, main_amp, atk, decay, filter_depth;
+float clock_speed, note_spread, main_amp, atk, decay, filter_depth, delay_time,
+    delay_feedback;
+;
 
 void UpdateControls();
 void MapControls();
@@ -40,6 +46,8 @@ void TraverseQuintCircle();
 void AdvanceSequencer();
 void SetEnvControls();
 void NextSamples(float &sig);
+void SoundGenerator(float &sig);
+void Effects(float &sig);
 
 void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
                    AudioHandle::InterleavingOutputBuffer out,
@@ -47,24 +55,31 @@ void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
 {
     float sig;
 
-    UpdateControls();
-    MapControls();
+    update_count++;
+    if(update_count == UPDATE_RATE)
+    {
+        UpdateControls();
+        MapControls();
+        AdvanceSequencer();
+        SetEnvControls();
+    }
+    update_count %= UPDATE_RATE;
+
 
     if(button1.Pressed())
     {
         TraverseQuintCircle();
     }
 
-    AdvanceSequencer();
-    SetEnvControls();
 
-    clock.SetFreq((clock_speed * 4096) / 60 * STEP_COUNT);
+    clock.SetFreq((clock_speed * 4096) / 60 * STEP_COUNT * UPDATE_RATE);
 
     sig = 0;
     for(size_t i = 0; i < size; i += 2)
     {
         NextSamples(sig);
 
+        sig = tanh(sig);
         sig *= main_amp;
 
         out[i]     = sig;
@@ -80,7 +95,7 @@ int main(void)
     // components before initialization.
     hardware.Configure();
     hardware.Init();
-    hardware.SetAudioBlockSize(4);
+    hardware.SetAudioBlockSize(1);
 
     //How many samples we'll output per second
     float samplerate = hardware.AudioSampleRate();
@@ -128,6 +143,9 @@ int main(void)
         flt[i].SetRes(0.5);
     }
 
+    // Initialize the delay line
+    dl.Init();
+
     //Start the adc
     hardware.adc.Start();
 
@@ -147,6 +165,8 @@ void UpdateControls()
     mx_knb_4 = hardware.adc.GetMuxFloat(1, 3);
     mx_knb_5 = hardware.adc.GetMuxFloat(1, 4);
     mx_knb_6 = hardware.adc.GetMuxFloat(1, 5);
+    mx_knb_7 = hardware.adc.GetMuxFloat(1, 6);
+    mx_knb_8 = hardware.adc.GetMuxFloat(1, 7);
 
     // debounce Buttons
     button1.Debounce();
@@ -156,12 +176,23 @@ void UpdateControls()
 
 void MapControls()
 {
-    clock_speed  = pow(mx_knb_1, 3);
-    note_spread  = pow(mx_knb_2, 2);
-    main_amp     = pow(mx_knb_3, 2);
-    atk          = pow(mx_knb_4, 2);
-    decay        = pow(mx_knb_5, 2);
-    filter_depth = pow(mx_knb_6, 2);
+    clock_speed    = pow(mx_knb_1, 2);
+    note_spread    = pow(mx_knb_2, 2);
+    main_amp       = pow(mx_knb_3, 2);
+    atk            = pow(mx_knb_4, 2);
+    decay          = pow(mx_knb_5, 2);
+    filter_depth   = pow(mx_knb_6, 2);
+    delay_time     = pow(mx_knb_7, 2);
+    delay_feedback = pow(mx_knb_8, 2);
+}
+
+void SetEnvControls()
+{
+    for(int i = 0; i < VOICE_COUNT; i++)
+    {
+        env[i].SetTime(ADENV_SEG_ATTACK, (atk * 16.0) + 0.01);
+        env[i].SetTime(ADENV_SEG_DECAY, (decay * 32.0) + 0.01);
+    }
 }
 
 void AdvanceSequencer()
@@ -212,6 +243,12 @@ void AdvanceSequencer()
 
 void NextSamples(float &sig)
 {
+    SoundGenerator(sig);
+    Effects(sig);
+}
+
+void SoundGenerator(float &sig)
+{
     for(int i = 0; i < VOICE_COUNT; i++)
     {
         float env_out = env[i].Process();
@@ -223,15 +260,13 @@ void NextSamples(float &sig)
     }
 }
 
-void SetEnvControls()
+void Effects(float &sig)
 {
-    for(int i = 0; i < VOICE_COUNT; i++)
-    {
-        env[i].SetTime(ADENV_SEG_ATTACK, (atk * 16.0) + 0.01);
-        env[i].SetTime(ADENV_SEG_DECAY, (decay * 32.0) + 0.01);
-    }
+    dl.SetDelay(delay_time * (MAX_DELAY - 0.1f));
+    float delay_sig = sig + dl.Read();
+    dl.Write(delay_sig * delay_feedback);
+    sig = delay_sig;
 }
-
 
 void TraverseQuintCircle()
 {
