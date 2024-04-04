@@ -30,7 +30,7 @@ Svf                         flt[VOICE_COUNT];
 Svf                         hp;
 
 // Controls
-AnalogControl controls[8];
+AnalogControl controls[16];
 Switch        button1, button2, button3;
 const int     UPDATE_RATE = 4;
 int           update_step = 0;
@@ -70,7 +70,7 @@ void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
     }
 
 
-    clock.SetFreq((clock_speed.Value() * 4096) / 60 * STEP_COUNT);
+    clock.SetFreq(clock_speed.Value());
 
     sig = 0;
     for(size_t i = 0; i < size; i += 2)
@@ -105,7 +105,7 @@ int main(void)
 
     //Create an ADC configuration
     AdcChannelConfig adcConfig[2];
-    adcConfig[0].InitSingle(seed::A0);
+    adcConfig[0].InitMux(seed::A4, 8, seed::D20, seed::D21, seed::D22);
     adcConfig[1].InitMux(seed::A11, 8, seed::D12, seed::D13, seed::D14);
 
     //Initialize the buttons
@@ -117,17 +117,24 @@ int main(void)
     hardware.adc.Init(adcConfig, 2);
 
     //Initialize the analog controls
-    for(int i = 0; i < 8; i++)
+    int channel_idx = 0;
+    for(int i = 0; i < 16; i++)
     {
-        controls[i].Init(hardware.adc.GetMuxPtr(1, i),
+        if(i % 8 == 0)
+        {
+            channel_idx++;
+        }
+        controls[i].Init(hardware.adc.GetMuxPtr(channel_idx, i % 8),
                          samplerate / UPDATE_RATE,
                          false,
                          false,
                          0.1);
     }
 
+
     //Initialize the parameters
-    clock_speed.Init(controls[0], 0, 1, Parameter::LOGARITHMIC);
+    clock_speed.Init(
+        controls[0], 0.125 * STEP_COUNT, 10 * STEP_COUNT, Parameter::LINEAR);
     note_spread.Init(controls[1], 0, 1, Parameter::LINEAR);
     main_amp.Init(controls[2], 0, 1, Parameter::LINEAR);
     atk.Init(controls[3], 0.01, 4, Parameter::EXPONENTIAL);
@@ -274,6 +281,7 @@ void NextSamples(float &sig)
     dl.Write(delay_sig * delay_feedback.Value());
     sig = delay_sig;
 }
+
 
 void TraverseQuintCircle()
 {
