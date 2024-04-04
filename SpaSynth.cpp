@@ -28,6 +28,7 @@ Oscillator                  osc[VOICE_COUNT];
 AdEnv                       env[VOICE_COUNT];
 Svf                         flt[VOICE_COUNT];
 Svf                         hp;
+Oscillator                  mod_dl;
 
 // Controls
 AnalogControl controls[16];
@@ -37,7 +38,7 @@ int           update_step = 0;
 
 // Parameters
 Parameter clock_speed, note_spread, main_amp, atk, decay, filter_depth,
-    delay_time, delay_feedback;
+    delay_time, delay_feedback, dl_mod_depth, dl_mod_freq;
 ;
 
 void UpdateDigitalControls();
@@ -120,7 +121,7 @@ int main(void)
     int channel_idx = 0;
     for(int i = 0; i < 16; i++)
     {
-        if(i % 8 == 0)
+        if(i != 0 && i % 8 == 0)
         {
             channel_idx++;
         }
@@ -134,14 +135,16 @@ int main(void)
 
     //Initialize the parameters
     clock_speed.Init(
-        controls[0], 0.125 * STEP_COUNT, 10 * STEP_COUNT, Parameter::LINEAR);
-    note_spread.Init(controls[1], 0, 1, Parameter::LINEAR);
-    main_amp.Init(controls[2], 0, 1, Parameter::LINEAR);
-    atk.Init(controls[3], 0.01, 4, Parameter::EXPONENTIAL);
-    decay.Init(controls[4], 0.01, 8, Parameter::EXPONENTIAL);
-    filter_depth.Init(controls[5], 0, 4000, Parameter::EXPONENTIAL);
-    delay_time.Init(controls[6], 0, MAX_DELAY - 0.1f, Parameter::LINEAR);
-    delay_feedback.Init(controls[7], 0.001, 0.999, Parameter::LINEAR);
+        controls[8], 0.125 * STEP_COUNT, 10 * STEP_COUNT, Parameter::LINEAR);
+    note_spread.Init(controls[9], 0, 1, Parameter::LINEAR);
+    main_amp.Init(controls[10], 0, 1, Parameter::LINEAR);
+    atk.Init(controls[11], 0.01, 4, Parameter::EXPONENTIAL);
+    decay.Init(controls[12], 0.01, 8, Parameter::EXPONENTIAL);
+    filter_depth.Init(controls[13], 0, 4000, Parameter::EXPONENTIAL);
+    delay_time.Init(controls[14], 0, MAX_DELAY - 0.1f, Parameter::LINEAR);
+    delay_feedback.Init(controls[15], 0.001, 0.999, Parameter::LINEAR);
+    dl_mod_depth.Init(controls[0], 0, MAX_DELAY / 8, Parameter::EXPONENTIAL);
+    dl_mod_freq.Init(controls[1], 0.0001, 4, Parameter::LINEAR);
 
 
     //Set up oscillators
@@ -152,6 +155,11 @@ int main(void)
         osc[i].SetAmp(1.f);
         osc[i].SetFreq(1000);
     }
+
+    mod_dl.Init(samplerate);
+    mod_dl.SetWaveform(mod_dl.WAVE_SIN);
+    mod_dl.SetAmp(1);
+    mod_dl.SetFreq(1);
 
     //Set up volume envelopes
     for(int i = 0; i < VOICE_COUNT; i++)
@@ -207,6 +215,8 @@ void UpdateParameters()
     filter_depth.Process();
     delay_time.Process();
     delay_feedback.Process();
+    dl_mod_depth.Process();
+    dl_mod_freq.Process();
 }
 
 void SetEnvelopeParameters()
@@ -276,7 +286,9 @@ void NextSamples(float &sig)
         sig += flt[i].Low() * 0.6f;
     }
 
-    dl.SetDelay(delay_time.Value());
+    mod_dl.SetFreq(dl_mod_freq.Value());
+    float mod_sig = (mod_dl.Process() / 2) + 1;
+    dl.SetDelay(delay_time.Value() - (dl_mod_depth.Value() * mod_sig));
     float delay_sig = sig + dl.Read();
     dl.Write(delay_sig * delay_feedback.Value());
     sig = delay_sig;
