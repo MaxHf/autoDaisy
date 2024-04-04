@@ -32,19 +32,19 @@ Svf                         hp;
 // Controls
 AnalogControl controls[8];
 Switch        button1, button2, button3;
-const int     UPDATES        = 12;
-int           update_counter = 0;
+const int     UPDATE_RATE = 4;
+int           update_step = 0;
 
 // Parameters
-float clock_speed, note_spread, main_amp, atk, decay, filter_depth, delay_time,
-    delay_feedback;
+Parameter clock_speed, note_spread, main_amp, atk, decay, filter_depth,
+    delay_time, delay_feedback;
 ;
 
-void UpdateControls();
-void MapControls();
+void UpdateDigitalControls();
+void UpdateParameters();
 void TraverseQuintCircle();
 void AdvanceSequencer();
-void SetControls();
+void SetEnvelopeParameters();
 void NextSamples(float &sig);
 
 void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
@@ -53,16 +53,16 @@ void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
 {
     float sig;
 
-    if(update_counter == 0)
+    if(update_step == 0)
     {
-        UpdateControls();
-        MapControls();
-        AdvanceSequencer();
-        SetControls();
+        UpdateParameters();
     }
-    update_counter++;
-    update_counter %= UPDATES;
+    update_step++;
+    update_step %= UPDATE_RATE;
 
+    UpdateDigitalControls();
+    AdvanceSequencer();
+    SetEnvelopeParameters();
 
     if(button1.Pressed())
     {
@@ -70,7 +70,7 @@ void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
     }
 
 
-    clock.SetFreq((clock_speed * 4096) / 60 * STEP_COUNT * UPDATES);
+    clock.SetFreq((clock_speed.Value() * 4096) / 60 * STEP_COUNT);
 
     sig = 0;
     for(size_t i = 0; i < size; i += 2)
@@ -81,7 +81,7 @@ void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
         hp.Process(sig);
         sig = hp.High();
 
-        sig *= main_amp;
+        sig *= main_amp.Value();
 
         out[i]     = sig;
         out[i + 1] = sig;
@@ -120,11 +120,22 @@ int main(void)
     for(int i = 0; i < 8; i++)
     {
         controls[i].Init(hardware.adc.GetMuxPtr(1, i),
-                         samplerate / UPDATES,
+                         samplerate / UPDATE_RATE,
                          false,
                          false,
-                         0.01);
+                         0.1);
     }
+
+    //Initialize the parameters
+    clock_speed.Init(controls[0], 0, 1, Parameter::LOGARITHMIC);
+    note_spread.Init(controls[1], 0, 1, Parameter::LINEAR);
+    main_amp.Init(controls[2], 0, 1, Parameter::LINEAR);
+    atk.Init(controls[3], 0.01, 4, Parameter::EXPONENTIAL);
+    decay.Init(controls[4], 0.01, 8, Parameter::EXPONENTIAL);
+    filter_depth.Init(controls[5], 0, 4000, Parameter::EXPONENTIAL);
+    delay_time.Init(controls[6], 0, MAX_DELAY - 0.1f, Parameter::LINEAR);
+    delay_feedback.Init(controls[7], 0.001, 0.999, Parameter::LINEAR);
+
 
     //Set up oscillators
     for(int i = 0; i < VOICE_COUNT; i++)
@@ -171,40 +182,33 @@ int main(void)
     for(;;) {}
 }
 
-void UpdateControls()
+void UpdateDigitalControls()
 {
-    for(size_t i = 0; i < 8; i++)
-    {
-        controls[i].Process();
-    }
-
     // debounce Buttons
     button1.Debounce();
     button2.Debounce();
     button3.Debounce();
 }
 
-void MapControls()
+void UpdateParameters()
 {
-    clock_speed    = pow(controls[0].Value(), 2);
-    note_spread    = pow(controls[1].Value(), 2);
-    main_amp       = pow(controls[2].Value(), 2);
-    atk            = pow(controls[3].Value(), 4);
-    decay          = pow(controls[4].Value(), 4);
-    filter_depth   = pow(controls[5].Value(), 2);
-    delay_time     = pow(controls[6].Value(), 4);
-    delay_feedback = controls[7].Value();
+    clock_speed.Process();
+    note_spread.Process();
+    main_amp.Process();
+    atk.Process();
+    decay.Process();
+    filter_depth.Process();
+    delay_time.Process();
+    delay_feedback.Process();
 }
 
-void SetControls()
+void SetEnvelopeParameters()
 {
     for(int i = 0; i < VOICE_COUNT; i++)
     {
-        env[i].SetTime(ADENV_SEG_ATTACK, (atk * 16.0) + 0.01);
-        env[i].SetTime(ADENV_SEG_DECAY, (decay * 32.0) + 0.01);
+        env[i].SetTime(ADENV_SEG_ATTACK, atk.Value());
+        env[i].SetTime(ADENV_SEG_DECAY, decay.Value());
     }
-
-    dl.SetDelay(delay_time * (MAX_DELAY - 0.1f));
 }
 
 void AdvanceSequencer()
@@ -220,7 +224,7 @@ void AdvanceSequencer()
             current_voice++;
             current_voice %= VOICE_COUNT;
 
-            int max_offset = floor((STEP_COUNT - 1) * note_spread) + 1;
+            int max_offset = floor((STEP_COUNT - 1) * note_spread.Value()) + 1;
 
             int rand_step = rand() / ((RAND_MAX + 1u) / max_offset);
             steps[rand_step][current_voice]
@@ -260,12 +264,14 @@ void NextSamples(float &sig)
         float env_out = env[i].Process();
         osc[i].SetAmp(env_out);
         float current_sig = osc[i].Process() * 0.5f;
-        flt[i].SetFreq(200 + (env_out * filter_depth * 4000));
+        flt[i].SetFreq(200 + (env_out * filter_depth.Value()));
         flt[i].Process(current_sig);
-        sig += flt[i].Low();
+        sig += flt[i].Low() * 0.6f;
     }
+
+    dl.SetDelay(delay_time.Value());
     float delay_sig = sig + dl.Read();
-    dl.Write(delay_sig * delay_feedback);
+    dl.Write(delay_sig * delay_feedback.Value());
     sig = delay_sig;
 }
 
